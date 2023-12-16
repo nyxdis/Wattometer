@@ -1,11 +1,13 @@
-import octoprint.plugin
+
+import os.path
+from datetime import datetime
+from pathlib import Path
+
 import octoprint.events
 import octoprint.logging
-import octoprint.events
-import os.path
-from octoprint.util import RepeatedTimer
-
+import octoprint.plugin
 from fritzconnection import FritzConnection
+from octoprint.util import RepeatedTimer
 
 
 class Wattometer(octoprint.plugin.StartupPlugin,
@@ -19,6 +21,7 @@ class Wattometer(octoprint.plugin.StartupPlugin,
         self.watt = 0
         self.printRunning = False
         self.printDone = False
+        self.saveFilePath = None
 
     def get_settings_defaults(self):
         return dict(
@@ -58,10 +61,11 @@ class Wattometer(octoprint.plugin.StartupPlugin,
         self._plugin_manager.send_plugin_message(self._identifier, str(self.watt) + "|" + str(totalWatt))
 
     def addWattToFile(self, watt):
-        saveFilePath = os.path.join(self.get_plugin_data_folder(), "saveFile.txt")
-        if not os.path.exists(saveFilePath):
-            open(saveFilePath, "w").close()
-        with open(saveFilePath, "r+") as file:
+        if self.saveFilePath == None:
+            return 0
+
+        Path(self.saveFilePath).touch()
+        with open(self.saveFilePath, "r+") as file:
             fileContent = file.readline()
             if fileContent == "":
                 fileContent = 0
@@ -69,30 +73,33 @@ class Wattometer(octoprint.plugin.StartupPlugin,
                 return float(fileContent)
             if self.printRunning:
                 self._plugin_manager.send_plugin_message(self._identifier, "Print_Started")
-                wattToWrite = float(fileContent) + watt
+                interval = self._settings.get(["intervall"])
+                wattToWrite = float(fileContent) + (watt * (interval / 3600))
                 file.seek(0)
                 file.write(str(wattToWrite))
                 file.truncate()
-                return float(fileContent) + watt
+                return wattToWrite
             return 0
         
     def resetFile(self):
-        saveFilePath = os.path.join(self.get_plugin_data_folder(), "saveFile.txt")
-        with open(saveFilePath, "w") as file:
+        with open(self.saveFilePath, "w") as file:
             file.write("0")
 
     def on_event(self, event, payload):
         if event == octoprint.events.Events.PRINT_STARTED:
+            saveFileName = datetime.now().strftime('%Y-%m-%d_%H%M%S') + payload['name']
+            self.saveFilePath = os.path.join(self.get_plugin_data_folder(), saveFileName)
             self.resetFile()
             self.printRunning = True
             self.printDone = False
         if event == octoprint.events.Events.PRINT_CANCELLING:
             self._plugin_manager.send_plugin_message(self._identifier, "Print_Cancelled")
-            self.resetFile()
+            self.saveFilePath = None
             self.printRunning = False
             self.printDone = False
         if event == octoprint.events.Events.PRINT_DONE:
             self._plugin_manager.send_plugin_message(self._identifier, "Print_Done")
+            self.saveFilePath = None
             self.printRunning = False
             self.printDone = True
 
